@@ -1,0 +1,176 @@
+services:
+  kafka:
+    image: apache/kafka:${KAFKA_IMAGE_VERSION}
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  order-api:
+    build:
+      context: .
+      args:
+        CMD: order-api
+    container_name: order-api
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKER: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+    depends_on:
+      kafka:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+  payment-api:
+    build:
+      context: .
+      args:
+        CMD: payment-api
+    container_name: payment-api
+    ports:
+      - "8081:8081"
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+    depends_on:
+      otel-collector:
+        condition: service_started
+
+  consumer:
+    build:
+      context: .
+      args:
+        CMD: consumer
+    container_name: consumer
+    environment:
+      KAFKA_BROKER: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      PAYMENT_API_ADDR: http://payment-api:8081
+    depends_on:
+      kafka:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+      payment-api:
+        condition: service_started
+
+  load-gen:
+    build:
+      context: .
+      args:
+        CMD: load-gen
+    container_name: load-gen
+    environment:
+      ORDER_API_ADDR: http://order-api:8080
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      INTERVAL_MS: 2000
+    depends_on:
+      order-api:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+
+  producer:
+    build:
+      context: .
+      args:
+        CMD: producer
+    container_name: producer
+    environment:
+      KAFKA_BROKER: ${KAFKA_BROKER}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:${OTEL_COLLECTOR_IMAGE_VERSION}
+    command: ["--config", "/etc/otelcol/config.yaml"]
+    volumes:
+      - ./monitoring/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - tempo
+      - loki
+      - prometheus
+
+  tempo:
+    image: grafana/tempo:${TEMPO_IMAGE_VERSION}
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./monitoring/tempo-config.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
+
+  loki:
+    image: grafana/loki:${LOKI_IMAGE_VERSION}
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./monitoring/loki-config.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_IMAGE_VERSION}
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-remote-write-receiver"
+      - "--enable-feature=exemplar-storage"
+      - "--enable-feature=native-histograms"
+    volumes:
+      - ./monitoring/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_IMAGE_VERSION}
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./monitoring/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+
+  mcp-grafana:
+    image: grafana/mcp-grafana
+    ports:
+      - "8000:8000"
+    environment:
+      - GRAFANA_URL=http://grafana:3000
+      - GRAFANA_SERVICE_ACCOUNT_TOKEN=${GRAFANA_SERVICE_ACCOUNT_TOKEN}
+    command: ["-t", "streamable-http"]
+    depends_on:
+      - grafana
+
+volumes:
+  tempo-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:
