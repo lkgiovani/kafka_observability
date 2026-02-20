@@ -1,0 +1,6 @@
+server.host: "0.0.0.0"
+server.name: "kibana"
+xpack.encryptedSavedObjects.encryptionKey: "${XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY}"
+xpack.reporting.encryptionKey: "${XPACK_REPORTING_ENCRYPTIONKEY}"
+xpack.security.encryptionKey: "${XPACK_SECURITY_ENCRYPTIONKEY}"
+monitoring.ui.container.elasticsearch.enabled: true

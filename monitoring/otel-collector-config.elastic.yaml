@@ -1,0 +1,76 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  resource/remove-noise:
+    attributes:
+      - key: process.command_args
+        action: delete
+      - key: process.command
+        action: delete
+      - key: process.owner
+        action: delete
+      - key: process.executable.name
+        action: delete
+      - key: process.executable.path
+        action: delete
+      - key: process.pid
+        action: delete
+      - key: process.runtime.description
+        action: delete
+      - key: host.arch
+        action: delete
+      - key: host.name
+        action: delete
+      - key: host.id
+        action: delete
+      - key: os.type
+        action: delete
+      - key: os.version
+        action: delete
+      - key: os.description
+        action: delete
+
+  transform/remove-scope:
+    log_statements:
+      - context: scope
+        statements:
+          - set(name, "")
+
+  batch:
+
+exporters:
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
+
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+
+  otlphttp/apm:
+    endpoint: http://apm-server:8200
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/tempo, otlphttp/apm]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheusremotewrite, otlphttp/apm]
+    logs:
+      receivers: [otlp]
+      processors: [resource/remove-noise, transform/remove-scope, batch]
+      exporters: [loki, otlphttp/apm]
